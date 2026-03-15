@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("OrbitView.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+da0112402e48c21354e17f16781b4f2788c24ebd")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+44b5e9172f5ec9d319ab2cd940eb9bc6af309631")]
 [assembly: System.Reflection.AssemblyProductAttribute("OrbitView.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("OrbitView.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

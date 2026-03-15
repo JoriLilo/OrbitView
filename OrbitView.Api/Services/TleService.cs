@@ -1,6 +1,7 @@
 using OrbitView.Api.DTOs;
 using OrbitView.Api.Models;
 using OrbitView.Api.Repositories;
+using System.Text.Json;
 
 namespace OrbitView.Api.Services;
 
@@ -10,19 +11,19 @@ public class TleService : ITleService
     private readonly HttpClient _httpClient;
     private readonly ILogger<TleService> _logger;
 
-    private const string CelesTrakUrl =
-        "https://celestrak.org/SOCRATES/query.php?CODE=all&FORMAT=TLE";
-
-    private const string CelesTrakStationsUrl =
-        "https://celestrak.org/pub/TLE/stations.txt";
-
     public TleService(ITleRepository repo, IHttpClientFactory httpClientFactory,
         ILogger<TleService> logger)
     {
         _repo = repo;
         _httpClient = httpClientFactory.CreateClient();
+        _httpClient.DefaultRequestHeaders.Add("User-Agent",
+            "OrbitView/1.0 (educational project)");
+        _httpClient.Timeout = TimeSpan.FromSeconds(30);
         _logger = logger;
     }
+
+    private string BuildUrl(int noradId) =>
+        $"https://celestrak.org/NORAD/elements/gp.php?CATNR={noradId}&FORMAT=JSON";
 
     public async Task<TleFetchResultDto> FetchAndStoreAsync(int? triggeredByUserId = null)
     {
@@ -33,55 +34,51 @@ public class TleService : ITleService
         {
             _logger.LogInformation("Starting TLE fetch from CelesTrak...");
 
-            // Fetch TLE data from CelesTrak stations feed
-            var response = await _httpClient.GetStringAsync(CelesTrakStationsUrl);
-            var tleDict = ParseTleResponse(response);
-
-            _logger.LogInformation("Parsed {Count} TLE records from CelesTrak", tleDict.Count);
-
-            // Get all our active satellites from DB
             var satellites = await _repo.GetAllActiveSatellitesAsync();
+            _logger.LogInformation("Fetching TLE for {Count} satellites...", satellites.Count);
 
             foreach (var satellite in satellites)
             {
-                // Try to find matching TLE by NORAD ID
-                if (!tleDict.TryGetValue(satellite.NoradId, out var tlePair))
+                try
                 {
-                    _logger.LogWarning("No TLE found for {Name} (NORAD {Id})",
-                        satellite.Name, satellite.NoradId);
-                    continue;
+                    var url = BuildUrl(satellite.NoradId);
+                    var json = await _httpClient.GetStringAsync(url);
+                    var entry = ParseGpJson(json);
+
+                    if (entry == null)
+                    {
+                        _logger.LogWarning("No data returned for {Name} (NORAD {Id})",
+                            satellite.Name, satellite.NoradId);
+                        continue;
+                    }
+
+                    await _repo.SetAllNotCurrentAsync(satellite.Id);
+
+                    await _repo.AddTleRecordAsync(new TleRecord
+                    {
+                        SatelliteId = satellite.Id,
+                        Line1 = entry.Line1,
+                        Line2 = entry.Line2,
+                        Epoch = entry.Epoch,
+                        Inclination = entry.Inclination,
+                        Eccentricity = entry.Eccentricity,
+                        MeanMotion = entry.MeanMotion,
+                        IsCurrent = true,
+                        FetchedAt = fetchedAt
+                    });
+
+                    satellitesUpdated++;
+                    _logger.LogInformation("Updated TLE for {Name}", satellite.Name);
                 }
-
-                var (line1, line2) = tlePair;
-
-                // Parse fields from TLE lines
-                var parsed = ParseTleFields(line1, line2);
-                if (parsed == null) continue;
-
-                // Mark old records as not current
-                await _repo.SetAllNotCurrentAsync(satellite.Id);
-
-                // Insert new current record
-                var record = new TleRecord
+                catch (Exception ex)
                 {
-                    SatelliteId = satellite.Id,
-                    Line1 = line1,
-                    Line2 = line2,
-                    Epoch = parsed.Epoch,
-                    Inclination = parsed.Inclination,
-                    Eccentricity = parsed.Eccentricity,
-                    MeanMotion = parsed.MeanMotion,
-                    IsCurrent = true,
-                    FetchedAt = fetchedAt
-                };
-
-                await _repo.AddTleRecordAsync(record);
-                satellitesUpdated++;
+                    _logger.LogWarning("Failed TLE fetch for {Name}: {Error}",
+                        satellite.Name, ex.Message);
+                }
             }
 
             await _repo.SaveChangesAsync();
 
-            // Log the successful fetch
             await _repo.AddFetchLogAsync(new TleFetchLog
             {
                 FetchedAt = fetchedAt,
@@ -93,7 +90,8 @@ public class TleService : ITleService
 
             await _repo.SaveChangesAsync();
 
-            _logger.LogInformation("TLE fetch complete. {Count} satellites updated.", satellitesUpdated);
+            _logger.LogInformation("TLE fetch complete. {Count} satellites updated.",
+                satellitesUpdated);
 
             return new TleFetchResultDto
             {
@@ -128,77 +126,127 @@ public class TleService : ITleService
         }
     }
 
-    private Dictionary<int, (string line1, string line2)> ParseTleResponse(string raw)
-    {
-        var result = new Dictionary<int, (string, string)>();
-        var lines = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                       .Select(l => l.Trim())
-                       .ToArray();
-
-        // TLE format: name line, line1 (starts with "1 "), line2 (starts with "2 ")
-        for (int i = 0; i < lines.Length - 2; i++)
-        {
-            var line1 = lines[i + 1];
-            var line2 = lines[i + 2];
-
-            if (!line1.StartsWith("1 ") || !line2.StartsWith("2 "))
-                continue;
-
-            // NORAD ID is in characters 2-7 of line 1
-            if (int.TryParse(line1.Substring(2, 5).Trim(), out int noradId))
-            {
-                result[noradId] = (line1, line2);
-                i += 2; // skip the two TLE lines
-            }
-        }
-
-        return result;
-    }
-
-    private TleParsed? ParseTleFields(string line1, string line2)
+    private GpEntry? ParseGpJson(string json)
     {
         try
         {
-            // Epoch from line 1 characters 18-32
-            var epochStr = line1.Substring(18, 14).Trim();
-            var year = int.Parse(epochStr.Substring(0, 2));
-            var fullYear = year < 57 ? 2000 + year : 1900 + year;
-            var dayOfYear = double.Parse(epochStr.Substring(2));
-            var epoch = new DateTime(fullYear, 1, 1, 0, 0, 0, DateTimeKind.Utc)
-                .AddDays(dayOfYear - 1);
+            var docs = JsonSerializer.Deserialize<List<JsonElement>>(json);
+            if (docs == null || docs.Count == 0) return null;
 
-            // Inclination from line 2 characters 8-16
-            var inclination = decimal.Parse(line2.Substring(8, 8).Trim(),
-                System.Globalization.CultureInfo.InvariantCulture);
+            var doc = docs[0];
 
-            // Eccentricity from line 2 characters 26-33 (implied decimal point)
-            var eccStr = "0." + line2.Substring(26, 7).Trim();
-            var eccentricity = decimal.Parse(eccStr,
-                System.Globalization.CultureInfo.InvariantCulture);
+            // Parse epoch
+            var epochStr = doc.GetProperty("EPOCH").GetString() ?? string.Empty;
+            var epoch = DateTime.Parse(epochStr, null,
+                System.Globalization.DateTimeStyles.RoundtripKind);
 
-            // Mean motion from line 2 characters 52-63
-            var meanMotion = decimal.Parse(line2.Substring(52, 11).Trim(),
-                System.Globalization.CultureInfo.InvariantCulture);
+            // Read orbital elements directly from JSON
+            var inclination = (decimal)doc.GetProperty("INCLINATION").GetDouble();
+            var eccentricity = (decimal)doc.GetProperty("ECCENTRICITY").GetDouble();
+            var meanMotion = (decimal)doc.GetProperty("MEAN_MOTION").GetDouble();
+            var noradId = doc.GetProperty("NORAD_CAT_ID").GetInt32();
+            var objectName = doc.GetProperty("OBJECT_NAME").GetString() ?? string.Empty;
 
-            return new TleParsed
+            // Build TLE lines from GP data so we still have them for satellite.js
+            var line1 = BuildTleLine1(doc);
+            var line2 = BuildTleLine2(doc);
+
+            return new GpEntry
             {
+                NoradId = noradId,
                 Epoch = epoch,
                 Inclination = inclination,
                 Eccentricity = eccentricity,
-                MeanMotion = meanMotion
+                MeanMotion = meanMotion,
+                Line1 = line1,
+                Line2 = line2
             };
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogWarning("GP JSON parse error: {Error}", ex.Message);
             return null;
         }
     }
 
-    private class TleParsed
+    private string BuildTleLine1(JsonElement doc)
     {
+        // Reconstruct TLE Line 1 from GP fields
+        // Format: 1 NNNNNC NNNNNAAA NNNNN.NNNNNNNN +.NNNNNNNN +NNNNN-N +NNNNN-N N NNNNN
+        try
+        {
+            var noradId = doc.GetProperty("NORAD_CAT_ID").GetInt32();
+            var classification = doc.GetProperty("CLASSIFICATION_TYPE").GetString() ?? "U";
+            var intlDesig = doc.GetProperty("OBJECT_ID").GetString() ?? "00000A";
+            var epochStr = doc.GetProperty("EPOCH").GetString() ?? string.Empty;
+            var epoch = DateTime.Parse(epochStr);
+            var bstar = doc.GetProperty("BSTAR").GetDouble();
+            var elementSetNo = doc.GetProperty("ELEMENT_SET_NO").GetInt32();
+            var mmDot = doc.GetProperty("MEAN_MOTION_DOT").GetDouble();
+
+            // Epoch in TLE format: YYDDD.DDDDDDDD
+            var yy = epoch.Year % 100;
+            var dayOfYear = epoch.DayOfYear +
+                (epoch.Hour * 3600 + epoch.Minute * 60 + epoch.Second) / 86400.0;
+
+            var intlDesigFormatted = intlDesig.Replace("-", "").PadRight(8).Substring(0, 8);
+            var bstarStr = FormatScientific(bstar);
+            var mmDotStr = $"{mmDot:+.00000000;-.00000000}".Replace(".", "");
+            if (mmDot >= 0) mmDotStr = $" {Math.Abs(mmDot):00000000}";
+            else mmDotStr = $"-{Math.Abs(mmDot):00000000}";
+
+            return $"1 {noradId:D5}{classification} {intlDesigFormatted} " +
+                   $"{yy:D2}{dayOfYear:000.00000000} {mmDot:+.00000000} " +
+                   $" 00000-0 {bstarStr} 0 {elementSetNo:D4}0";
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private string BuildTleLine2(JsonElement doc)
+    {
+        try
+        {
+            var noradId = doc.GetProperty("NORAD_CAT_ID").GetInt32();
+            var inclination = doc.GetProperty("INCLINATION").GetDouble();
+            var raan = doc.GetProperty("RA_OF_ASC_NODE").GetDouble();
+            var ecc = doc.GetProperty("ECCENTRICITY").GetDouble();
+            var argPerigee = doc.GetProperty("ARG_OF_PERICENTER").GetDouble();
+            var meanAnomaly = doc.GetProperty("MEAN_ANOMALY").GetDouble();
+            var meanMotion = doc.GetProperty("MEAN_MOTION").GetDouble();
+            var revAtEpoch = doc.GetProperty("REV_AT_EPOCH").GetInt32();
+
+            var eccStr = ecc.ToString("0.0000000").Replace("0.", "");
+
+            return $"2 {noradId:D5} {inclination:000.0000} {raan:000.0000} " +
+                   $"{eccStr} {argPerigee:000.0000} {meanAnomaly:000.0000} " +
+                   $"{meanMotion:00.00000000}{revAtEpoch:D5}0";
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private string FormatScientific(double value)
+    {
+        if (value == 0) return " 00000-0";
+        var exp = (int)Math.Floor(Math.Log10(Math.Abs(value)));
+        var mantissa = value / Math.Pow(10, exp);
+        var sign = value >= 0 ? " " : "-";
+        return $"{sign}{Math.Abs(mantissa * 100000):00000}{(exp >= 0 ? "+" : "-")}{Math.Abs(exp)}";
+    }
+
+    private class GpEntry
+    {
+        public int NoradId { get; set; }
         public DateTime Epoch { get; set; }
         public decimal Inclination { get; set; }
         public decimal Eccentricity { get; set; }
         public decimal MeanMotion { get; set; }
+        public string Line1 { get; set; } = string.Empty;
+        public string Line2 { get; set; } = string.Empty;
     }
 }
