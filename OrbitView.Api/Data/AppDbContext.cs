@@ -18,8 +18,10 @@ public class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Unique constraints
-        modelBuilder.Entity<Satellite>()
-            .HasIndex(s => s.NoradId).IsUnique();
+       modelBuilder.Entity<Satellite>()
+            .HasOne(s => s.Category)
+            .WithMany(c => c.Satellites)
+            .HasForeignKey(s => s.SatelliteCategoryId);
 
         modelBuilder.Entity<User>()
             .HasIndex(u => u.Email).IsUnique();

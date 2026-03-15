@@ -1,0 +1,9 @@
+namespace OrbitView.Api.DTOs;
+
+public class SatelliteListDto
+{
+    public int Total { get; set; }
+    public int Page { get; set; }
+    public int PageSize { get; set; }
+    public List<SatelliteDto> Data { get; set; } = new();
+}
