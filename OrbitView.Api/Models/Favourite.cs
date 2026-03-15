@@ -10,7 +10,7 @@ public class Favourite
     public User User { get; set; } = null!;
     public int SatelliteId{get; set;}
     public Satellite Satellite { get; set; } = null!;
-    public DateTime SavedAt{get; set;}
+    public DateTime SavedAt{get; set;} = DateTime.UtcNow;
     public string? Notes{get; set;}= string.Empty;
 
 

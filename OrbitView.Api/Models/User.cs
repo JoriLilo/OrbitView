@@ -16,4 +16,6 @@ public class User
     public DateTime? LastLoginAt { get; set; }
      public ICollection<Favourite> Favourites { get; set; } = new List<Favourite>();
 
+
+
 }
