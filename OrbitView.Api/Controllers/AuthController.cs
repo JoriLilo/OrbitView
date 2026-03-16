@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;
 using OrbitView.Api.DTOs;
 using OrbitView.Api.Services;
 using System.Security.Claims;
@@ -49,8 +50,9 @@ public class AuthController : ControllerBase
     [Authorize]
     public async Task<IActionResult> GetMe()
     {
-        var userId = int.Parse(
-            User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+               if (!TryGetUserId(out var userId)) {
+            return Unauthorized(new { error = "Invalid or missing user identifier in token." });
+        }
         var profile = await _authService.GetProfileAsync(userId);
         if (profile == null) return NotFound();
         return Ok(profile);
@@ -60,10 +62,22 @@ public class AuthController : ControllerBase
     [Authorize]
     public async Task<IActionResult> UpdateMe([FromBody] UpdateProfileDto dto)
     {
-        var userId = int.Parse(
-            User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+           if (!TryGetUserId(out var userId)){
+            return Unauthorized(new { error = "Invalid or missing user identifier in token." });
+        }
         var result = await _authService.UpdateProfileAsync(userId, dto);
         if (result == null) return NotFound();
         return Ok(result);
     }
+    private bool TryGetUserId(out int userId)
+    {
+        userId = 0;
+
+        var rawUserId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue("sub");
+
+        return int.TryParse(rawUserId, out userId);
+    }
+
 }
