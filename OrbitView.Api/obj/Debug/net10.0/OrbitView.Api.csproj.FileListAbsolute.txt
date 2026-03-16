@@ -6,7 +6,6 @@
 /Users/jori/Desktop/OrbitView/OrbitView.Api/bin/Debug/net10.0/OrbitView.Api.runtimeconfig.json
 /Users/jori/Desktop/OrbitView/OrbitView.Api/bin/Debug/net10.0/OrbitView.Api.dll
 /Users/jori/Desktop/OrbitView/OrbitView.Api/bin/Debug/net10.0/OrbitView.Api.pdb
-/Users/jori/Desktop/OrbitView/OrbitView.Api/bin/Debug/net10.0/Microsoft.AspNetCore.OpenApi.dll
 /Users/jori/Desktop/OrbitView/OrbitView.Api/bin/Debug/net10.0/Microsoft.OpenApi.dll
 /Users/jori/Desktop/OrbitView/OrbitView.Api/obj/Debug/net10.0/OrbitView.Api.csproj.AssemblyReference.cache
 /Users/jori/Desktop/OrbitView/OrbitView.Api/obj/Debug/net10.0/rpswa.dswa.cache.json
