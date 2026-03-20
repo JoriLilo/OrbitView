@@ -7,6 +7,7 @@ using OrbitView.Api.Data;
 using OrbitView.Api.Repositories;
 using OrbitView.Api.Services;
 using System.Text;
+using OrbitView.Api.Repositories;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -79,6 +80,8 @@ builder.Services.AddScoped<ITleService, TleService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 
 builder.Services.AddHostedService<TleFetcherService>();
+builder.Services.AddScoped<IFavouriteRepository, FavouriteRepository>();
+builder.Services.AddScoped<IFavouriteService, FavouriteService>();
 
 
 var app = builder.Build();
